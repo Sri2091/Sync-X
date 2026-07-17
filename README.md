@@ -68,14 +68,4 @@ Follow `PLUGIN_INSTALL.md`. In short: keep `premiere-plugin/` in a stable
 location, enable Premiere Developer Mode, then use UXP Developer Tool's
 **Add Plugin** command and select `premiere-plugin/manifest.json`.
 
-## Update or publish
-
-This folder is a local Git repository ready for you to connect to a remote:
-
-```sh
-git remote add origin YOUR_REPOSITORY_URL
-git push -u origin main
-```
-
-No API keys, virtual environments, downloaded models, rendered audio, or
-generated SRT files should be committed.
+## Made with Codex - 5.6 Sol
