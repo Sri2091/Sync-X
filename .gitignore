@@ -1,0 +1,33 @@
+.DS_Store
+._*
+
+# Python
+server/venv/
+server/.venv/
+server/__pycache__/
+server/**/__pycache__/
+server/.pytest_cache/
+server/**/*.py[cod]
+
+# Runtime artifacts and credentials
+server/jobs/
+server/tmp/
+server/*.log
+.env
+.env.*
+*.key
+*.pem
+
+# Generated media and subtitle output
+*.mp3
+*.wav
+*.m4a
+*.srt
+
+# Local QA and editor files
+.qa/
+.idea/
+.vscode/
+
+# Distribution archives
+*.zip
