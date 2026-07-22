@@ -58,7 +58,7 @@ Sync-X-v2.1/
 └── README.md
 ```
 
-Keep `install.command`, `server/`, and `premiere-plugin/` together. The installer resolves every source path relative to its own location, so the repository can be stored in any writable folder.
+Keep `install.command`, `server/`, and `premiere-plugin/` together while installing. The installer resolves every source path relative to its own location and leaves the packaged folders unchanged.
 
 ## Installation
 
@@ -84,24 +84,30 @@ chmod +x install.command
 The installer will:
 
 1. Check or install the required command-line tools.
-2. Create a private Python environment inside `server/venv`.
-3. Install everything listed in `server/requirements.txt`.
-4. Download Whisper large-v3 and the verified Silero VAD model when missing.
-5. Install the UXP plugin at:
+2. Copy the server code into a stable per-user location:
+
+```text
+~/Library/Application Support/Sync-X/Server/
+```
+
+3. Create a private Python environment inside the installed server folder.
+4. Install everything listed in the copied `requirements.txt`.
+5. Download Whisper large-v3 and the verified Silero VAD model when missing.
+6. Install the UXP plugin at:
 
 ```text
 ~/Library/Application Support/Adobe/UXP/Plugins/External/com.sridhar.syncx_2.1.0
 ```
 
-The `~` automatically resolves to the current macOS user, so no username or source-folder path is hard-coded.
+The `~` automatically resolves to the current macOS user, so no username or source-folder path is hard-coded. Existing installed `venv` and runtime data are preserved during updates, while obsolete server code is removed. The original packaged `server/` folder is never modified.
 
-6. Create a Desktop shortcut named:
+7. Create a Desktop shortcut named:
 
 ```text
 ~/Desktop/Sync-X_v2.1_run.command
 ```
 
-The shortcut points to the real launcher inside this repository. Keep the repository in a stable location after installation so the shortcut remains valid.
+The shortcut points to the stable installed server, so moving or deleting the downloaded repository after installation will not break it. Keep the repository only if you want to rerun the installer for updates.
 
 ### 3. Start the local server
 
@@ -111,7 +117,7 @@ Double-click the shortcut created on your Desktop:
 Sync-X_v2.1_run.command
 ```
 
-The original launcher remains at `server/Sync-X_v2.1_run.command`.
+The shortcut launches `~/Library/Application Support/Sync-X/Server/Sync-X_v2.1_run.command`. The original packaged launcher remains unchanged at `server/Sync-X_v2.1_run.command`.
 
 Keep its Terminal window open while using Sync-X. The server runs only on your Mac at:
 
@@ -185,7 +191,7 @@ Reinstall the private server packages:
 
 ### Server shows offline
 
-Run the Desktop shortcut `Sync-X_v2.1_run.command` (or `server/Sync-X_v2.1_run.command`), leave Terminal open, and check `http://127.0.0.1:8765/api/v1/health`. Stop any older application already using port `8765`.
+Run the Desktop shortcut `Sync-X_v2.1_run.command` (or the installed launcher under `~/Library/Application Support/Sync-X/Server/`), leave Terminal open, and check `http://127.0.0.1:8765/api/v1/health`. Stop any older application already using port `8765`.
 
 ### Python certificate error
 
@@ -209,7 +215,8 @@ Confirm the Gemini key and internet connection, then retry. Free-tier Gemini lim
 
 ## Notes
 
-- Do not commit `server/venv`, API keys, downloaded models, rendered audio, or generated SRT files.
+- Do not commit virtual environments, API keys, downloaded models, rendered audio, or generated SRT files.
+- The installed server and its private environment live under `~/Library/Application Support/Sync-X/Server/`.
 - The Whisper models are stored in `~/.cache/whisper-cpp/` and are shared across compatible Sync-X installations.
 - More server details are available in [`server/README.md`](server/README.md).
 - More panel details are available in [`premiere-plugin/README.md`](premiere-plugin/README.md).

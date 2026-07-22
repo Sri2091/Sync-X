@@ -4,13 +4,17 @@ set -euo pipefail
 
 ROOT_DIR="${0:A:h}"
 SCRIPT_NAME="${SYNCX_INSTALLER_NAME:-${0:t}}"
-SERVER_DIR="$ROOT_DIR/server"
+SOURCE_SERVER_DIR="$ROOT_DIR/server"
 SERVER_LAUNCHER_NAME="Sync-X_v2.1_run.command"
+SOURCE_SERVER_LAUNCHER="$SOURCE_SERVER_DIR/$SERVER_LAUNCHER_NAME"
+SERVER_INSTALL_ROOT="${HOME}/Library/Application Support/Sync-X"
+SERVER_DIR="$SERVER_INSTALL_ROOT/Server"
 SERVER_LAUNCHER="$SERVER_DIR/$SERVER_LAUNCHER_NAME"
 PLUGIN_DIR="$ROOT_DIR/premiere-plugin"
 CCX_FILE="$ROOT_DIR/syncx_v2.1_premierepro.ccx"
 PLUGIN_INSTALL_ROOT="${HOME}/Library/Application Support/Adobe/UXP/Plugins/External"
 PLUGIN_INSTALL_DIR="$PLUGIN_INSTALL_ROOT/com.sridhar.syncx_2.1.0"
+SOURCE_REQUIREMENTS_FILE="$SOURCE_SERVER_DIR/requirements.txt"
 REQUIREMENTS_FILE="$SERVER_DIR/requirements.txt"
 VENV_DIR="$SERVER_DIR/venv"
 DESKTOP_SHORTCUT="${HOME}/Desktop/$SERVER_LAUNCHER_NAME"
@@ -56,15 +60,15 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   exit 1
 fi
 
-if [[ ! -f "$REQUIREMENTS_FILE" || ! -f "$SERVER_DIR/app.py" ]]; then
-  echo "The Sync-X Premiere server folder is incomplete."
-  echo "Expected server files under: $SERVER_DIR"
+if [[ ! -f "$SOURCE_REQUIREMENTS_FILE" || ! -f "$SOURCE_SERVER_DIR/app.py" ]]; then
+  echo "The packaged Sync-X Premiere server folder is incomplete."
+  echo "Expected source files under: $SOURCE_SERVER_DIR"
   exit 1
 fi
 
-if [[ ! -f "$SERVER_LAUNCHER" ]]; then
-  echo "The Sync-X server launcher is missing."
-  echo "Expected launcher at: $SERVER_LAUNCHER"
+if [[ ! -f "$SOURCE_SERVER_LAUNCHER" ]]; then
+  echo "The packaged Sync-X server launcher is missing."
+  echo "Expected source launcher at: $SOURCE_SERVER_LAUNCHER"
   exit 1
 fi
 
@@ -145,10 +149,53 @@ check_command() {
 }
 
 server_packages_ready() {
+  server_files_ready || return 1
   [[ -x "$VENV_DIR/bin/python" ]] || return 1
   "$VENV_DIR/bin/python" -c \
     'import sys; assert sys.version_info >= (3, 10); import fastapi, uvicorn, multipart, google.genai' \
     >/dev/null 2>&1
+}
+
+server_files_ready() {
+  [[ -f "$SERVER_DIR/app.py" ]] && \
+    [[ -f "$REQUIREMENTS_FILE" ]] && \
+    [[ -x "$SERVER_LAUNCHER" ]]
+}
+
+install_server() {
+  if [[ -L "$SERVER_DIR" ]]; then
+    echo "Refusing to install the server through a symbolic link:"
+    echo "  $SERVER_DIR"
+    return 1
+  fi
+
+  if [[ -e "$SERVER_DIR" && ! -d "$SERVER_DIR" ]]; then
+    echo "A file already uses the server installation path:"
+    echo "  $SERVER_DIR"
+    return 1
+  fi
+
+  mkdir -p "$SERVER_INSTALL_ROOT" "$SERVER_DIR"
+  if [[ ! -w "$SERVER_INSTALL_ROOT" || ! -w "$SERVER_DIR" ]]; then
+    echo "The server installation location is not writable:"
+    echo "  $SERVER_DIR"
+    return 1
+  fi
+
+  /usr/bin/rsync -a --delete \
+    --exclude='.DS_Store' \
+    --exclude='._*' \
+    --exclude='venv/' \
+    --exclude='.venv/' \
+    --exclude='runtime/' \
+    --exclude='jobs/' \
+    --exclude='tmp/' \
+    --exclude='__pycache__/' \
+    --exclude='*.pyc' \
+    "$SOURCE_SERVER_DIR/" "$SERVER_DIR/"
+
+  chmod +x "$SERVER_LAUNCHER"
+  server_files_ready
 }
 
 plugin_is_installed() {
@@ -234,7 +281,8 @@ activate_homebrew
 
 echo
 echo "Sync-X v2.1 Premiere Pro dependency check"
-echo "Package folder: $ROOT_DIR"
+echo "Source package: $ROOT_DIR"
+echo "Server destination: $SERVER_DIR"
 echo "Server requirements: $REQUIREMENTS_FILE"
 echo "Plugin destination: $PLUGIN_INSTALL_DIR"
 echo
@@ -266,6 +314,13 @@ if verify_vad_model; then
   print_status "Silero VAD model" "ready: $VAD_MODEL"
 else
   print_status "Silero VAD model" "missing or invalid"
+  MISSING=1
+fi
+
+if server_files_ready; then
+  print_status "Stable server installation" "ready: $SERVER_DIR"
+else
+  print_status "Stable server installation" "missing"
   MISSING=1
 fi
 
@@ -333,6 +388,19 @@ if [[ -z "$PYTHON_BIN" ]]; then
   exit 1
 fi
 
+REQUIREMENTS_CHANGED=0
+if [[ ! -f "$REQUIREMENTS_FILE" ]] || ! cmp -s "$SOURCE_REQUIREMENTS_FILE" "$REQUIREMENTS_FILE"; then
+  REQUIREMENTS_CHANGED=1
+fi
+
+echo
+echo "Installing the server in the current user's Application Support folder…"
+if ! install_server; then
+  echo "The Sync-X server could not be installed at:"
+  echo "  $SERVER_DIR"
+  exit 1
+fi
+
 if [[ ! -x "$VENV_DIR/bin/python" ]]; then
   echo
   echo "Creating the private Premiere server environment…"
@@ -347,7 +415,7 @@ elif ! server_packages_ready; then
   fi
 fi
 
-if (( FORCE_PYTHON )) || ! server_packages_ready; then
+if (( FORCE_PYTHON )) || (( REQUIREMENTS_CHANGED )) || ! server_packages_ready; then
   echo
   echo "Installing Premiere server requirements from:"
   echo "  $REQUIREMENTS_FILE"
@@ -407,7 +475,9 @@ fi
 echo
 echo "Installation complete."
 echo "Start the Sync-X server from your Desktop: $DESKTOP_SHORTCUT"
+echo "Installed server: $SERVER_DIR"
 echo "Server launcher: $SERVER_LAUNCHER"
+echo "Source server left unchanged: $SOURCE_SERVER_DIR"
 echo "Premiere plugin installed at: $PLUGIN_INSTALL_DIR"
 if [[ -f "$CCX_FILE" ]]; then
   echo "Packaged CCX: $CCX_FILE"

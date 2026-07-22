@@ -11,10 +11,11 @@ silence boundaries.
 3. Double-click `Sync-X_v2.1_run.command`.
 4. Keep the Terminal window open while using the Premiere panel.
 
-The top-level `install.command` also creates a Desktop shortcut named
-`Sync-X_v2.1_run.command`. The shortcut points to this launcher, so keep the
-complete Sync-X folder in a stable location or rerun the installer after moving
-it.
+The preferred top-level `install.command` copies this server into
+`~/Library/Application Support/Sync-X/Server/`, creates its private environment
+there, and leaves this packaged source folder unchanged. It also creates a
+Desktop shortcut named `Sync-X_v2.1_run.command` that points to the installed
+launcher.
 
 On first launch, `Sync-X_v2.1_run.command` creates a private `venv`, installs
 `requirements.txt`, and downloads and verifies the small official Silero VAD
