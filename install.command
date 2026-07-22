@@ -5,12 +5,15 @@ set -euo pipefail
 ROOT_DIR="${0:A:h}"
 SCRIPT_NAME="${SYNCX_INSTALLER_NAME:-${0:t}}"
 SERVER_DIR="$ROOT_DIR/server"
+SERVER_LAUNCHER_NAME="Sync-X_v2.1_run.command"
+SERVER_LAUNCHER="$SERVER_DIR/$SERVER_LAUNCHER_NAME"
 PLUGIN_DIR="$ROOT_DIR/premiere-plugin"
 CCX_FILE="$ROOT_DIR/syncx_v2.1_premierepro.ccx"
 PLUGIN_INSTALL_ROOT="${HOME}/Library/Application Support/Adobe/UXP/Plugins/External"
 PLUGIN_INSTALL_DIR="$PLUGIN_INSTALL_ROOT/com.sridhar.syncx_2.1.0"
 REQUIREMENTS_FILE="$SERVER_DIR/requirements.txt"
 VENV_DIR="$SERVER_DIR/venv"
+DESKTOP_SHORTCUT="${HOME}/Desktop/$SERVER_LAUNCHER_NAME"
 
 MODEL_DIR="${HOME}/.cache/whisper-cpp"
 WHISPER_MODEL="$MODEL_DIR/ggml-large-v3.bin"
@@ -56,6 +59,12 @@ fi
 if [[ ! -f "$REQUIREMENTS_FILE" || ! -f "$SERVER_DIR/app.py" ]]; then
   echo "The Sync-X Premiere server folder is incomplete."
   echo "Expected server files under: $SERVER_DIR"
+  exit 1
+fi
+
+if [[ ! -f "$SERVER_LAUNCHER" ]]; then
+  echo "The Sync-X server launcher is missing."
+  echo "Expected launcher at: $SERVER_LAUNCHER"
   exit 1
 fi
 
@@ -147,6 +156,29 @@ plugin_is_installed() {
   [[ -f "$installed_manifest" ]] || return 1
   grep -Eq '"id"[[:space:]]*:[[:space:]]*"com\.sridhar\.syncx"' "$installed_manifest" && \
     grep -Eq '"version"[[:space:]]*:[[:space:]]*"2\.1\.0"' "$installed_manifest"
+}
+
+desktop_shortcut_ready() {
+  [[ -L "$DESKTOP_SHORTCUT" ]] || return 1
+  [[ "$(readlink "$DESKTOP_SHORTCUT")" == "$SERVER_LAUNCHER" ]]
+}
+
+install_desktop_shortcut() {
+  local desktop_dir="${DESKTOP_SHORTCUT:h}"
+
+  mkdir -p "$desktop_dir"
+  chmod +x "$SERVER_LAUNCHER"
+
+  if [[ -L "$DESKTOP_SHORTCUT" ]]; then
+    rm -f "$DESKTOP_SHORTCUT"
+  elif [[ -e "$DESKTOP_SHORTCUT" ]]; then
+    echo "A file or folder already uses the Desktop shortcut name:"
+    echo "  $DESKTOP_SHORTCUT"
+    return 1
+  fi
+
+  ln -s "$SERVER_LAUNCHER" "$DESKTOP_SHORTCUT"
+  desktop_shortcut_ready
 }
 
 install_premiere_plugin() {
@@ -251,6 +283,13 @@ else
   MISSING=1
 fi
 
+if desktop_shortcut_ready; then
+  print_status "Desktop server shortcut" "ready: $DESKTOP_SHORTCUT"
+else
+  print_status "Desktop server shortcut" "missing"
+  MISSING=1
+fi
+
 if (( CHECK_ONLY )); then
   echo
   if (( MISSING )); then
@@ -347,19 +386,28 @@ if ! install_premiere_plugin; then
   exit 1
 fi
 
+echo
+echo "Creating the Desktop server shortcut…"
+if ! install_desktop_shortcut; then
+  echo "The Desktop shortcut could not be created at:"
+  echo "  $DESKTOP_SHORTCUT"
+  exit 1
+fi
+
 if [[ -f "$ROOT_DIR/install.sh" ]]; then
   chmod +x "$ROOT_DIR/install.sh"
 fi
 if [[ -f "$ROOT_DIR/install.command" ]]; then
   chmod +x "$ROOT_DIR/install.command"
 fi
-if [[ -f "$SERVER_DIR/run.command" ]]; then
-  chmod +x "$SERVER_DIR/run.command"
+if [[ -f "$SERVER_LAUNCHER" ]]; then
+  chmod +x "$SERVER_LAUNCHER"
 fi
 
 echo
 echo "Installation complete."
-echo "Start the Sync-X server with: $SERVER_DIR/run.command"
+echo "Start the Sync-X server from your Desktop: $DESKTOP_SHORTCUT"
+echo "Server launcher: $SERVER_LAUNCHER"
 echo "Premiere plugin installed at: $PLUGIN_INSTALL_DIR"
 if [[ -f "$CCX_FILE" ]]; then
   echo "Packaged CCX: $CCX_FILE"

@@ -8,10 +8,15 @@ silence boundaries.
 
 1. Stop any earlier Sync-X or Hinglish SRT server using port `8765`.
 2. Keep this complete folder together in a writable location.
-3. Double-click `run.command`.
+3. Double-click `Sync-X_v2.1_run.command`.
 4. Keep the Terminal window open while using the Premiere panel.
 
-On first launch, `run.command` creates a private `venv`, installs
+The top-level `install.command` also creates a Desktop shortcut named
+`Sync-X_v2.1_run.command`. The shortcut points to this launcher, so keep the
+complete Sync-X folder in a stable location or rerun the installer after moving
+it.
+
+On first launch, `Sync-X_v2.1_run.command` creates a private `venv`, installs
 `requirements.txt`, and downloads and verifies the small official Silero VAD
 model when it is missing. The server binds only to `127.0.0.1:8765`.
 

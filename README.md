@@ -53,7 +53,7 @@ Sync-X-v2.1/
 ├── premiere-plugin/                 # Premiere Pro UXP panel source
 ├── server/                          # Local FastAPI transcription server
 │   ├── requirements.txt
-│   └── run.command                  # Double-click server launcher
+│   └── Sync-X_v2.1_run.command      # Double-click server launcher
 ├── syncx_v2.1_premierepro.ccx       # Packaged Premiere plugin
 └── README.md
 ```
@@ -95,13 +95,23 @@ The installer will:
 
 The `~` automatically resolves to the current macOS user, so no username or source-folder path is hard-coded.
 
-### 3. Start the local server
-
-Double-click:
+6. Create a Desktop shortcut named:
 
 ```text
-server/run.command
+~/Desktop/Sync-X_v2.1_run.command
 ```
+
+The shortcut points to the real launcher inside this repository. Keep the repository in a stable location after installation so the shortcut remains valid.
+
+### 3. Start the local server
+
+Double-click the shortcut created on your Desktop:
+
+```text
+Sync-X_v2.1_run.command
+```
+
+The original launcher remains at `server/Sync-X_v2.1_run.command`.
 
 Keep its Terminal window open while using Sync-X. The server runs only on your Mac at:
 
@@ -175,7 +185,7 @@ Reinstall the private server packages:
 
 ### Server shows offline
 
-Run `server/run.command`, leave Terminal open, and check `http://127.0.0.1:8765/api/v1/health`. Stop any older application already using port `8765`.
+Run the Desktop shortcut `Sync-X_v2.1_run.command` (or `server/Sync-X_v2.1_run.command`), leave Terminal open, and check `http://127.0.0.1:8765/api/v1/health`. Stop any older application already using port `8765`.
 
 ### Python certificate error
 
