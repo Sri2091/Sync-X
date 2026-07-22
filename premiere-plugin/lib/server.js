@@ -1,4 +1,4 @@
-const HinglishServer = (() => {
+const SyncXServer = (() => {
   const BASE_URL = "http://127.0.0.1:8765";
 
   async function parseError(response) {
@@ -53,5 +53,13 @@ const HinglishServer = (() => {
     })).json();
   }
 
-  return { BASE_URL, health, options, createJob, getJob, getResult, cancelOrDelete };
+  return Object.freeze({
+    BASE_URL,
+    health,
+    options,
+    createJob,
+    getJob,
+    getResult,
+    cancelOrDelete,
+  });
 })();

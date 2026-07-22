@@ -1,7 +1,8 @@
-const HinglishPremiere = (() => {
+const SyncXPremiere = (() => {
   const uxp = require("uxp");
   const fs = uxp.storage.localFileSystem;
-  const RECOVERY_FILE = "hinglish-render-recovery.json";
+  const RECOVERY_FILE = "syncx-render-recovery.json";
+  const RESULT_BIN = "Sync-X";
   const TICKS_PER_SECOND = 254016000000;
 
   let _ppro = null;
@@ -28,7 +29,7 @@ const HinglishPremiere = (() => {
     const project = await api.Project.getActiveProject();
     if (!project) throw new Error("No Premiere project is open.");
     const sequence = await project.getActiveSequence();
-    if (!sequence) throw new Error("Open a sequence before using Hinglish SRT.");
+    if (!sequence) throw new Error("Open a sequence before using Sync-X.");
 
     const inPoint = await sequence.getInPoint();
     const outPoint = await sequence.getOutPoint();
@@ -77,7 +78,9 @@ const HinglishPremiere = (() => {
       const folder = await dataFolder();
       const file = await folder.getEntry(RECOVERY_FILE);
       return JSON.parse(await file.read());
-    } catch { return null; }
+    } catch {
+      return null;
+    }
   }
 
   async function writeRecovery(snapshot) {
@@ -111,10 +114,19 @@ const HinglishPremiere = (() => {
       })),
     };
     await writeRecovery(snapshot);
-    for (const item of context.tracks) {
-      const shouldMute = item.index !== selectedIndex;
-      const ok = await item.track.setMute(shouldMute);
-      if (ok === false) throw new Error(`Could not set mute state for A${item.index + 1}.`);
+    try {
+      for (const item of context.tracks) {
+        const shouldMute = item.index !== selectedIndex;
+        const ok = await item.track.setMute(shouldMute);
+        if (ok === false) throw new Error(`Could not set mute state for A${item.index + 1}.`);
+      }
+    } catch (error) {
+      try {
+        await restoreSnapshotWithContext(context, snapshot);
+      } catch (restoreError) {
+        throw new Error(`${error.message} Track recovery is required: ${restoreError.message}`);
+      }
+      throw error;
     }
     return snapshot;
   }
@@ -124,12 +136,20 @@ const HinglishPremiere = (() => {
     for (const state of snapshot.tracks || []) {
       try {
         const track = await context.sequence.getAudioTrack(state.index);
-        if (!track) { failed++; continue; }
+        if (!track) {
+          failed++;
+          continue;
+        }
         const currentId = track.id == null ? String(state.index) : String(track.id);
-        if (state.id != null && currentId !== String(state.id)) { failed++; continue; }
+        if (state.id != null && currentId !== String(state.id)) {
+          failed++;
+          continue;
+        }
         const ok = await track.setMute(Boolean(state.muted));
         if (ok === false) failed++;
-      } catch { failed++; }
+      } catch {
+        failed++;
+      }
     }
     if (failed) throw new Error(`Could not restore ${failed} audio track state(s).`);
     await clearRecovery();
@@ -153,13 +173,13 @@ const HinglishPremiere = (() => {
 
   async function createTempRender() {
     const folder = await fs.getTemporaryFolder();
-    const name = `hinglish_track_${Date.now()}_${Math.floor(Math.random() * 100000)}.mp3`;
+    const name = `syncx_track_${Date.now()}_${Math.floor(Math.random() * 100000)}.mp3`;
     return { folder, name, nativePath: `${folder.nativePath}/${name}` };
   }
 
   async function presetPath() {
     const pluginFolder = await fs.getPluginFolder();
-    const preset = await pluginFolder.getEntry("presets/hinglish-audio.epr");
+    const preset = await pluginFolder.getEntry("presets/syncx-audio.epr");
     return preset.nativePath;
   }
 
@@ -265,7 +285,7 @@ const HinglishPremiere = (() => {
     } catch {}
   }
 
-  async function findOrCreateResultBin(project, binName = "Hinglish SRT") {
+  async function findOrCreateResultBin(project, binName = RESULT_BIN) {
     const api = ppro();
     const root = await project.getRootItem();
     let items = await root.getItems();
@@ -276,8 +296,11 @@ const HinglishPremiere = (() => {
 
     const create = () => {
       const action = root.createBinAction(binName, false);
-      const ok = project.executeTransaction((compound) => compound.addAction(action), "Create Hinglish SRT bin");
-      if (ok === false) throw new Error("Premiere could not create the Hinglish SRT bin.");
+      const ok = project.executeTransaction(
+        (compound) => compound.addAction(action),
+        "Create Sync-X bin"
+      );
+      if (ok === false) throw new Error("Premiere could not create the Sync-X bin.");
     };
     if (typeof project.lockedAccess === "function") await project.lockedAccess(create);
     else create();
@@ -287,7 +310,7 @@ const HinglishPremiere = (() => {
       if (item.name !== binName) continue;
       try { return api.FolderItem.cast(item); } catch {}
     }
-    throw new Error("Hinglish SRT bin was created but could not be found.");
+    throw new Error("Sync-X bin was created but could not be found.");
   }
 
   async function listResultBinNames(project) {
@@ -295,7 +318,9 @@ const HinglishPremiere = (() => {
       const bin = await findOrCreateResultBin(project);
       const items = await bin.getItems();
       return (items || []).map((item) => item.name).filter(Boolean);
-    } catch { return []; }
+    } catch {
+      return [];
+    }
   }
 
   async function importSrt(nativePath, expectedProjectName) {
@@ -312,12 +337,17 @@ const HinglishPremiere = (() => {
       throw new Error(`Open project “${expectedProjectName}” to import this result.`);
     }
     const bin = await findOrCreateResultBin(project);
-    const ok = await project.importFiles([nativePath], true, bin, false);
+    // Project.importFiles expects a ProjectItem target, not a FolderItem.
+    // Passing the FolderItem is accepted by Premiere but silently falls back
+    // to the currently focused insertion bin.
+    const targetBin = api.ProjectItem.cast(bin);
+    const ok = await project.importFiles([nativePath], true, targetBin, false);
     if (ok === false) throw new Error("Premiere could not import the SRT file.");
     return { project, bin };
   }
 
-  return {
+  return Object.freeze({
+    RESULT_BIN,
     seconds,
     getContext,
     readRecovery,
@@ -330,5 +360,5 @@ const HinglishPremiere = (() => {
     deleteTempRender,
     listResultBinNames,
     importSrt,
-  };
+  });
 })();

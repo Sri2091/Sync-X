@@ -1,26 +1,33 @@
 {
   "manifestVersion": 5,
-  "id": "com.sridhar.hinglishsrt",
-  "name": "Hinglish SRT",
-  "version": "1.0.0",
+  "id": "com.sridhar.syncx",
+  "name": "Sync-X",
+  "version": "2.1.0",
   "main": "index.html",
   "host": {
     "app": "premierepro",
     "minVersion": "25.6.0"
   },
   "requiredPermissions": {
+    "clipboard": "read",
     "localFileSystem": "fullAccess",
     "network": {
       "domains": "all"
+    },
+    "webview": {
+      "allow": "yes",
+      "domains": [],
+      "allowLocalRendering": "yes",
+      "enableMessageBridge": "localOnly"
     },
     "allowCodeGenerationFromStrings": false
   },
   "entrypoints": [
     {
       "type": "panel",
-      "id": "hinglishSrtPanel",
+      "id": "syncXPanel",
       "label": {
-        "default": "Hinglish SRT"
+        "default": "Sync-X"
       },
       "minimumSize": {
         "width": 320,

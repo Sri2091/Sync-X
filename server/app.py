@@ -30,6 +30,7 @@ from pipeline import (
 
 BASE_DIR = Path(__file__).resolve().parent
 JOBS_ROOT = BASE_DIR / "runtime" / "jobs"
+TIMING_STRATEGY = "whisper-word-aligned-v2.1"
 RUNTIME = discover_runtime_paths()
 MANAGER = JobManager(JOBS_ROOT, RUNTIME)
 _cleanup_stop = threading.Event()
@@ -51,7 +52,7 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(
-    title="Hinglish SRT Server",
+    title="Sync-X Server",
     version=APP_VERSION,
     docs_url="/docs",
     redoc_url=None,
@@ -71,6 +72,7 @@ def health() -> dict[str, object]:
     return {
         "status": "ready" if all(item["ready"] for item in dependencies.values()) else "degraded",
         "version": APP_VERSION,
+        "timing_strategy": TIMING_STRATEGY,
         "busy": MANAGER.busy,
         "dependencies": dependencies,
     }

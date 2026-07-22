@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import re
 import shutil
@@ -13,12 +14,20 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable
 
+from timing import (
+    SILENCE_BOUNDARY_MS,
+    TimingError,
+    build_balanced_captions,
+    display_word_count,
+    normalize_timed_words as _normalize_timed_words,
+)
 
-APP_VERSION = "1.0.1-prototype"
+APP_VERSION = "2.1.0"
 MAX_DURATION_SECONDS = 30 * 60
 MAX_UPLOAD_BYTES = 64 * 1024 * 1024
 VAD_MIN_SILENCE_MS = 250
 VAD_SPEECH_PAD_MS = 50
+GEMINI_BATCH_SOURCE_WORDS = 50
 
 DEFAULT_VOCAB = (
     "CapMint, CapMint Insights, Scalper Mode, Reverse Mode, Trade Via Charts, "
@@ -206,6 +215,22 @@ def parse_srt(filepath: Path) -> list[dict[str, str]]:
     return entries
 
 
+def normalize_timed_words(
+    entries: Iterable[dict[str, object]],
+    speech_intervals: list[tuple[int, int]] | None = None,
+) -> list[dict[str, object]]:
+    """Expose the stable word-normalization layer with this module's parser."""
+    try:
+        return _normalize_timed_words(
+            entries,
+            speech_intervals=speech_intervals,
+            silence_ms=SILENCE_BOUNDARY_MS,
+            time_to_ms=time_to_ms,
+        )
+    except TimingError as exc:
+        raise PipelineError(str(exc)) from exc
+
+
 def parse_vad_speech_intervals(log_text: str) -> list[tuple[int, int]]:
     """Extract original-audio speech ranges reported by whisper.cpp VAD."""
     pattern = re.compile(
@@ -365,34 +390,33 @@ def merge_broken_words(
 
 
 def split_entries(
-    entries: Iterable[dict[str, str]], max_words: int, offset_ms: int = 0
+    entries: Iterable[dict[str, object]], max_words: int, offset_ms: int = 0
 ) -> list[dict[str, str]]:
-    max_words = normalize_max_words(max_words)
-    output: list[dict[str, str]] = []
-    for entry in entries:
-        words = entry["text"].split()
-        if not words:
-            continue
-        start_ms = time_to_ms(entry["start"])
-        end_ms = max(start_ms + 1, time_to_ms(entry["end"]))
-        chunks = [words[i : i + max_words] for i in range(0, len(words), max_words)]
-        word_cursor = 0
-        for chunk in chunks:
-            chunk_start = start_ms + int((end_ms - start_ms) * word_cursor / len(words))
-            word_cursor += len(chunk)
-            chunk_end = start_ms + int((end_ms - start_ms) * word_cursor / len(words))
-            output.append(
-                {
-                    "start": ms_to_time(chunk_start + offset_ms),
-                    "end": ms_to_time(max(chunk_start + 1, chunk_end) + offset_ms),
-                    "text": " ".join(chunk),
-                }
-            )
-    return output
+    materialized = [dict(entry) for entry in entries]
+    if not materialized:
+        return []
+    if "start_ms" not in materialized[0]:
+        materialized = normalize_timed_words(materialized)
+    try:
+        captions = build_balanced_captions(
+            materialized,
+            max_words=normalize_max_words(max_words),
+            offset_ms=int(offset_ms),
+        )
+    except TimingError as exc:
+        raise PipelineError(str(exc)) from exc
+    return [
+        {
+            "start": ms_to_time(int(caption["start_ms"])),
+            "end": ms_to_time(int(caption["end_ms"])),
+            "text": str(caption["text"]),
+        }
+        for caption in captions
+    ]
 
 
 def write_srt(
-    entries: Iterable[dict[str, str]],
+    entries: Iterable[dict[str, object]],
     output_path: Path,
     max_words: int,
     offset_ms: int = 0,
@@ -533,7 +557,10 @@ def run_whisper(
     attach_process: Callable[[subprocess.Popen[str] | None], None],
     on_line: Callable[[str], None],
 ) -> tuple[Path, list[tuple[int, int]]]:
-    max_len_chars = max(35, normalize_max_words(max_words) * 7)
+    # ``max_words`` is intentionally not used here.  Recognition always emits
+    # stable word anchors; the panel setting is applied only by the final
+    # balanced caption builder.
+    _ = max_words
     command = [
         str(runtime.whisper_cli),
         "-m",
@@ -544,8 +571,9 @@ def run_whisper(
         "--output-file",
         str(output_base),
         "--max-len",
-        str(max_len_chars),
+        "1",
         "--split-on-word",
+        "--flash-attn",
     ]
     if language == "hi":
         command.extend(
@@ -594,39 +622,88 @@ def run_whisper(
         parse_vad_speech_intervals(process_output) if language == "hi" else []
     )
     if language == "hi" and not speech_intervals:
-        raise PipelineError("Whisper VAD did not report usable speech timing ranges.")
+        on_line(
+            "Warning: Silero VAD reported no usable intervals; "
+            "using native 250 ms word gaps without dropping recognized text."
+        )
     return srt_path, speech_intervals
 
 
-def convert_to_hinglish(
-    entries: list[dict[str, str]],
-    api_key: str,
-    model_name: str,
-    cancel_event: threading.Event,
-) -> list[dict[str, str]]:
-    _check_cancel(cancel_event)
-    if not api_key.strip():
-        raise PipelineError("Gemini API key is required for Hindi mode.")
-    if model_name not in GEMINI_MODELS:
-        raise PipelineError("Unsupported Gemini model.")
-    try:
-        from google import genai
-    except ImportError as exc:
-        raise PipelineError("google-genai is not installed in the server environment.") from exc
+_GEMINI_RESPONSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "units": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "source_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 1,
+                    },
+                    "text": {"type": "string", "minLength": 1},
+                },
+                "required": ["source_ids", "text"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["units"],
+    "additionalProperties": False,
+}
 
-    numbered = [f"{index}|{entry['text']}" for index, entry in enumerate(entries)]
-    batch_text = "\n".join(numbered)
-    prompt = f"""Convert the following Hindi (Devanagari) subtitle lines to Hinglish (Hindi written in Roman/English script).
 
-RULES:
-- Write Hindi words in natural Roman script the way Indians actually type in chat — NOT academic transliteration
-- Examples: नहीं → nahi, क्या → kya, है → hai, मैं → main, और → aur, इसलिए → isliye, एक → ek
-- English words already in Roman script stay as-is (e.g. "feedback", "trading", "performance")
-- English words written in Devanagari should be converted to English (e.g. ट्रेडिंग → trading, फीडबैक → feedback, प्रॉफिट → profit, इंप्रूवमेंट → improvement, डाउनलोड → download)
+class _GeminiMappingError(ValueError):
+    """A syntactically valid response that fails source-word semantics."""
 
-BRAND / PHRASE PRESERVATION (CRITICAL — must be exact, never transliterated phonetically):
-The following are official product/brand names. They must appear EXACTLY as written below — same spelling, same capitalization, same spacing. Never split, merge, or phoneticize them.
 
+def _gemini_batches(
+    words: list[dict[str, object]],
+    maximum_source_words: int = GEMINI_BATCH_SOURCE_WORDS,
+) -> list[list[dict[str, object]]]:
+    """Batch whole speech blocks; a real silence is never crossed mid-batch."""
+    blocks: list[list[dict[str, object]]] = []
+    for word in words:
+        if not blocks or blocks[-1][-1]["block"] != word["block"]:
+            blocks.append([word])
+        else:
+            blocks[-1].append(word)
+    batches: list[list[dict[str, object]]] = []
+    current: list[dict[str, object]] = []
+    for block in blocks:
+        if current and len(current) + len(block) > maximum_source_words:
+            batches.append(current)
+            current = []
+        current.extend(block)
+        # A single uninterrupted speech block stays intact even if it is
+        # unusually long; splitting it would invent a silence boundary.
+        if len(current) >= maximum_source_words:
+            batches.append(current)
+            current = []
+    if current:
+        batches.append(current)
+    return batches
+
+
+def _hinglish_prompt(batch: list[dict[str, object]]) -> str:
+    source = [
+        {
+            "id": str(word["id"]),
+            "block": int(word["block"]),
+            "text": str(word["text"]),
+        }
+        for word in batch
+    ]
+    return f"""Convert the SOURCE WORDS from Hindi (Devanagari) to natural Hinglish (Hindi in Roman/English script).
+
+TRANSLITERATION RULES:
+- Use natural Indian chat spelling, not academic transliteration.
+- Examples: नहीं → nahi, क्या → kya, है → hai, मैं → main, और → aur, इसलिए → isliye, एक → ek.
+- Keep existing English words as English. Convert English written in Devanagari to the intended English word.
+- Preserve meaning and order. Do not paraphrase, summarize, invent, or omit speech.
+
+BRAND / PHRASE PRESERVATION (exact spelling and capitalization):
 - CapMint
 - CapMint Insights
 - Scalper Mode
@@ -636,66 +713,173 @@ The following are official product/brand names. They must appear EXACTLY as writ
 - Trade Via Charts
 - CapMint Trade Via Charts
 
-Examples of WRONG → RIGHT corrections you must make if the transcript contains misheard or malformed variants:
-- "Cap Mint" / "capmint" / "Kapmint" / "Cap Mind" → CapMint
-- "scalper mode" / "Scaler Mode" / "Skalper Mode" → Scalper Mode
-- "reverse mode" / "Riverse Mode" → Reverse Mode
-- "trade via charts" / "Trade via Charts" / "Trade Via Chart" → Trade Via Charts
-- "CapMint scalper mode" → CapMint Scalper Mode (capitalize every brand word)
-- When a CapMint product name appears, keep it as a single brand phrase.
+Correct variants such as "Cap Mint", "capmint", "Kapmint", or "Cap Mind" to "CapMint";
+"Scaler Mode" to "Scalper Mode"; "Riverse Mode" to "Reverse Mode"; and
+"Trade Via Chart" to "Trade Via Charts".
 
-FORMAT:
-- Keep the numbering format exactly: NUMBER|text
-- Do NOT add any extra text, explanation, or formatting
-- Do NOT skip any line
-- Each line must start with its original number
+ALIGNMENT CONTRACT:
+- Return JSON matching the supplied schema: {{"units":[{{"source_ids":["w000000"],"text":"..."}}]}}.
+- Every source ID must occur exactly once, in the original order.
+- A unit may consume multiple CONTIGUOUS source IDs only when the converted
+  expression must be joined or corrected (for example Cap + Mint → CapMint).
+- One source ID may produce multiple Roman-script words inside one unit.
+- Never combine IDs from different block values. A block change is a real silence.
+- Text must be non-empty. Do not return explanations or markdown.
 
-TIMING / ALIGNMENT (CRITICAL):
-- Each NUMBER represents one fixed subtitle time range
-- Convert every numbered line independently
-- Do NOT move, borrow, merge, split, reorder, add, or remove words across line numbers
-- Do NOT paraphrase, summarize, or rewrite the sentence
-- Preserve the original word order and meaning; only change the script and apply the listed brand corrections
+SOURCE WORDS:
+{json.dumps(source, ensure_ascii=False, separators=(",", ":"))}
+"""
 
-INPUT:
-{batch_text}
 
-OUTPUT (same format, just converted to Hinglish):"""
-
-    client = genai.Client(api_key=api_key.strip())
-    response = client.models.generate_content(model=model_name, contents=prompt)
-    _check_cancel(cancel_event)
+def _response_json(response: object) -> object:
+    parsed = getattr(response, "parsed", None)
+    if parsed is not None:
+        if hasattr(parsed, "model_dump"):
+            return parsed.model_dump()
+        return parsed
     output_text = (getattr(response, "text", None) or "").strip()
     if not output_text:
-        raise PipelineError("Gemini returned an empty response.")
+        raise _GeminiMappingError("Gemini returned an empty response")
+    try:
+        return json.loads(output_text)
+    except json.JSONDecodeError as exc:
+        raise _GeminiMappingError("Gemini returned invalid JSON") from exc
 
-    converted: dict[int, str] = {}
-    expected_ids = set(range(len(entries)))
-    for line in output_text.splitlines():
-        if "|" not in line:
-            continue
-        key, text = line.strip().split("|", 1)
-        try:
-            index = int(key.strip())
-        except ValueError:
-            continue
-        converted_text = text.strip()
-        if index not in expected_ids:
-            raise PipelineError("Gemini returned an out-of-range subtitle line ID.")
-        if index in converted:
-            raise PipelineError("Gemini returned a duplicate subtitle line ID.")
-        if not converted_text:
-            raise PipelineError("Gemini returned an empty subtitle line.")
-        converted[index] = converted_text
-    if set(converted) != expected_ids:
-        missing_count = len(expected_ids.difference(converted))
-        raise PipelineError(
-            f"Gemini omitted {missing_count} numbered subtitle line(s); no partial result was written."
+
+def _validate_gemini_mapping(
+    payload: object, source_words: list[dict[str, object]]
+) -> list[dict[str, object]]:
+    if not isinstance(payload, dict) or not isinstance(payload.get("units"), list):
+        raise _GeminiMappingError("Gemini response has no units array")
+    raw_units = payload["units"]
+    expected_ids = [str(word["id"]) for word in source_words]
+    source_by_id = {str(word["id"]): word for word in source_words}
+    cursor = 0
+    converted: list[dict[str, object]] = []
+    for raw_unit in raw_units:
+        if not isinstance(raw_unit, dict):
+            raise _GeminiMappingError("Gemini returned a malformed conversion unit")
+        source_ids = raw_unit.get("source_ids")
+        text = re.sub(r"\s+", " ", str(raw_unit.get("text") or "")).strip()
+        if (
+            not isinstance(source_ids, list)
+            or not source_ids
+            or not all(isinstance(source_id, str) for source_id in source_ids)
+        ):
+            raise _GeminiMappingError("A Gemini unit has invalid source IDs")
+        if not text or display_word_count(text) < 1:
+            raise _GeminiMappingError("A Gemini unit has empty converted text")
+        expected_slice = expected_ids[cursor : cursor + len(source_ids)]
+        if source_ids != expected_slice:
+            raise _GeminiMappingError(
+                "Gemini source IDs were omitted, duplicated, reordered, or non-contiguous"
+            )
+        source_group = [source_by_id[source_id] for source_id in source_ids]
+        blocks = {int(word["block"]) for word in source_group}
+        if len(blocks) != 1:
+            raise _GeminiMappingError(
+                "Gemini combined source words across a real silence boundary"
+            )
+        converted.append(
+            {
+                "source_ids": source_ids.copy(),
+                "text": text,
+                "start_ms": int(source_group[0]["start_ms"]),
+                "end_ms": int(source_group[-1]["end_ms"]),
+                "block": int(source_group[0]["block"]),
+            }
         )
+        cursor += len(source_ids)
+    if cursor != len(expected_ids):
+        raise _GeminiMappingError(
+            "Gemini omitted one or more source word IDs"
+        )
+    return converted
 
-    result = [entry.copy() for entry in entries]
-    for index, entry in enumerate(result):
-        entry["text"] = converted[index]
+
+def _create_genai_client(api_key: str):
+    try:
+        from google import genai
+    except ImportError as exc:
+        raise PipelineError(
+            "google-genai is not installed in the server environment."
+        ) from exc
+    return genai.Client(api_key=api_key)
+
+
+def convert_to_hinglish(
+    entries: list[dict[str, object]],
+    api_key: str,
+    model_name: str,
+    cancel_event: threading.Event,
+) -> list[dict[str, object]]:
+    _check_cancel(cancel_event)
+    if not api_key.strip():
+        raise PipelineError("Gemini API key is required for Hindi mode.")
+    if model_name not in GEMINI_MODELS:
+        raise PipelineError("Unsupported Gemini model.")
+
+    words = [dict(entry) for entry in entries]
+    if words and "start_ms" not in words[0]:
+        words = normalize_timed_words(words)
+    if not words:
+        return []
+
+    client = _create_genai_client(api_key.strip())
+    result: list[dict[str, object]] = []
+    for batch_number, batch in enumerate(_gemini_batches(words), 1):
+        base_prompt = _hinglish_prompt(batch)
+        prompt = base_prompt
+        last_error: _GeminiMappingError | None = None
+        for attempt in range(2):
+            _check_cancel(cancel_event)
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config={
+                        "response_mime_type": "application/json",
+                        "response_json_schema": _GEMINI_RESPONSE_SCHEMA,
+                    },
+                )
+            except Exception as exc:
+                if attempt == 0:
+                    # Free-tier and preview Gemini endpoints can fail
+                    # transiently. Retry the same bounded batch once without
+                    # exposing provider details or the API key to job logs.
+                    cancel_event.wait(1.0)
+                    _check_cancel(cancel_event)
+                    continue
+                raise PipelineError(
+                    "Gemini conversion request failed. Check the key, model, "
+                    "and internet connection, then try again."
+                ) from exc
+            _check_cancel(cancel_event)
+            try:
+                converted = _validate_gemini_mapping(
+                    _response_json(response), batch
+                )
+            except _GeminiMappingError as exc:
+                last_error = exc
+                if attempt == 0:
+                    prompt = (
+                        base_prompt
+                        + "\n\nRETRY CORRECTION:\n"
+                        + str(exc)
+                        + ". Regenerate the entire batch and obey every "
+                        "source-ID rule exactly."
+                    )
+                    continue
+                break
+            result.extend(converted)
+            last_error = None
+            break
+        if last_error is not None:
+            raise PipelineError(
+                "Gemini word alignment failed after one retry "
+                f"(batch {batch_number}): {last_error}. "
+                "No partial SRT was written."
+            ) from last_error
     return result
 
 
@@ -741,7 +925,12 @@ def process_audio(
     progress("converting", 28, "Audio conversion complete")
 
     transcript_base = work_dir / "transcript"
-    progress("transcribing", 32, f"Running Whisper large-v3 ({language})…")
+    progress(
+        "transcribing",
+        32,
+        f"Running Whisper large-v3 ({language}) with stable word anchors "
+        "(max-len=1, split-on-word, flash attention)…",
+    )
     whisper_srt, speech_intervals = run_whisper(
         wav_path,
         transcript_base,
@@ -755,29 +944,49 @@ def process_audio(
     )
 
     _check_cancel(cancel_event)
-    progress("cleaning", 62, "Parsing and cleaning transcription…")
-    entries = parse_srt(whisper_srt)
+    progress("cleaning", 62, "Normalizing real Whisper word timestamps…")
+    raw_entries = parse_srt(whisper_srt)
+    entries = normalize_timed_words(
+        raw_entries,
+        speech_intervals=speech_intervals if needs_gemini else None,
+    )
+    if not entries:
+        raise PipelineError("Whisper produced no usable timed words.")
+    block_count = 1 + max(int(entry["block"]) for entry in entries)
     if needs_gemini:
-        entries = constrain_entries_to_speech(entries, speech_intervals)
         progress(
             "cleaning",
             65,
-            f"Locked captions to {len(speech_intervals)} detected speech region(s)",
+            f"Kept {len(entries)} timed words across {block_count} "
+            "Silero speech block(s); VAD did not clip recognized text",
         )
-    entries = merge_broken_words(entries)
-    if not entries:
-        raise PipelineError("Whisper produced no usable subtitle entries.")
-    progress("cleaning", 68, f"Cleaned {len(entries)} transcript segments")
+    progress(
+        "cleaning",
+        68,
+        f"Prepared {len(entries)} source-word anchors; "
+        f"hard silence boundary {SILENCE_BOUNDARY_MS} ms",
+    )
 
     if needs_gemini:
-        progress("converting_hinglish", 72, f"Converting to Hinglish with {gemini_model}…")
+        gemini_batch_count = len(_gemini_batches(entries))
+        progress(
+            "converting_hinglish",
+            72,
+            f"Converting to Hinglish with {gemini_model} in "
+            f"{gemini_batch_count} silence-safe batch(es) using validated "
+            "source-word IDs…",
+        )
         entries = convert_to_hinglish(
             entries, gemini_api_key, gemini_model, cancel_event
         )
         progress("converting_hinglish", 88, "Hinglish conversion complete")
 
     _check_cancel(cancel_event)
-    progress("writing", 92, "Writing final SRT…")
+    progress(
+        "writing",
+        92,
+        "Balancing captions from final display-word counts and real word anchors…",
+    )
     suffix = "HINGLISH" if needs_gemini else "EN"
     output_name = f"{sanitize_stem(source_filename)}_{suffix}.srt"
     output_path = work_dir / output_name

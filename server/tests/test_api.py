@@ -27,7 +27,11 @@ class ApiTests(unittest.TestCase):
     def test_health_and_options(self):
         health = self.client.get("/api/v1/health")
         self.assertEqual(health.status_code, 200)
-        self.assertEqual(health.json()["version"], "1.0.1-prototype")
+        self.assertEqual(health.json()["version"], server_app.APP_VERSION)
+        self.assertEqual(
+            health.json()["timing_strategy"],
+            "whisper-word-aligned-v2.1",
+        )
         self.assertIn("whisper_vad_model", health.json()["dependencies"])
         options = self.client.get("/api/v1/options")
         self.assertEqual(options.status_code, 200)

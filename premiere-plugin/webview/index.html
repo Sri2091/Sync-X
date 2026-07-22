@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>Sync-X</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script src="app.js" defer></script>
+  </head>
+  <body>
+    <div id="app" data-state="booting">
+      <header class="topbar">
+        <div class="brand" aria-label="Sync-X">
+          <img class="brand-mark" src="assets/syncx-mark.svg" alt="" />
+          <span class="brand-name">Sync-X</span>
+        </div>
+
+        <div class="header-actions">
+          <button
+            id="refreshBtn"
+            class="icon-button"
+            type="button"
+            aria-label="Refresh server and sequence"
+            title="Refresh"
+            disabled
+          >
+            <img class="refresh-icon" src="assets/refresh.svg" alt="" />
+          </button>
+          <div id="serverBadge" class="server-status is-checking" aria-live="polite">
+            <span class="status-dot" aria-hidden="true"></span>
+            <span id="serverBadgeLabel">Checking…</span>
+          </div>
+        </div>
+      </header>
+
+      <main id="scrollArea">
+        <section id="fatalPanel" class="fatal-panel hidden" role="alert">
+          <strong>Sync-X could not start</strong>
+          <p id="fatalText">
+            Reload the panel. If this message remains, reinstall the Sync-X plugin.
+          </p>
+        </section>
+
+        <section id="recoveryCard" class="notice-card recovery-card hidden" role="status">
+          <div class="notice-mark" aria-hidden="true">!</div>
+          <div class="notice-copy">
+            <strong>Track recovery needed</strong>
+            <p id="recoveryText">
+              Open the interrupted sequence, then restore its saved audio-track states.
+            </p>
+            <button id="recoverBtn" class="secondary-button" type="button">
+              Restore Track States
+            </button>
+          </div>
+        </section>
+
+        <section class="hero workflow-visual" aria-labelledby="sequenceTitle">
+          <img class="hero-icon" src="assets/transcript.svg" alt="" />
+          <h1 id="sequenceTitle" class="hero-title">Looking for an active sequence…</h1>
+          <p id="sequenceMeta" class="hero-meta">Open a project and set sequence In and Out points.</p>
+          <div id="resultLine" class="hero-result hidden" aria-live="polite">
+            <span class="result-check" aria-hidden="true">✓</span>
+            <span id="resultSummary">SRT imported.</span>
+          </div>
+        </section>
+
+        <section id="resultCard" class="result-card hidden" aria-live="polite">
+          <div class="result-card-copy">
+            <strong id="resultTitle">SRT saved</strong>
+            <span id="resultDetail"></span>
+            <code id="resultPath"></code>
+          </div>
+          <button id="retryImportBtn" class="secondary-button hidden" type="button">
+            Retry Import
+          </button>
+        </section>
+
+        <div class="solo-warning workflow-visual">
+          <span class="solo-dot" aria-hidden="true"></span>
+          <span>Clear track Solo buttons first.</span>
+        </div>
+
+        <section class="field-block workflow-field">
+          <label class="eyebrow" for="trackSelect">Audio track</label>
+          <div class="select-shell">
+            <select id="trackSelect" disabled>
+              <option value="">Open a sequence and refresh</option>
+            </select>
+          </div>
+          <div class="range-line" aria-label="Sequence In and Out range">
+            <span>
+              <span id="inTime">—</span>
+              <span class="range-arrow" aria-hidden="true">→</span>
+              <span id="outTime">—</span>
+            </span>
+            <span id="durationTime">—</span>
+          </div>
+        </section>
+
+        <section class="field-block workflow-field">
+          <span id="languageLabel" class="eyebrow">Language</span>
+          <div
+            id="languageGroup"
+            class="segmented-control"
+            role="radiogroup"
+            aria-labelledby="languageLabel"
+          >
+            <button
+              id="languageHindi"
+              class="segment is-selected"
+              type="button"
+              role="radio"
+              aria-checked="true"
+              data-language="Hindi"
+            >
+              Hinglish
+            </button>
+            <button
+              id="languageEnglish"
+              class="segment"
+              type="button"
+              role="radio"
+              aria-checked="false"
+              data-language="English"
+            >
+              English
+            </button>
+          </div>
+        </section>
+
+        <section class="field-block workflow-field">
+          <div class="eyebrow split-label">
+            <label for="maxWords">Max words / caption</label>
+            <output id="maxWordsValue" for="maxWords">6</output>
+          </div>
+          <input
+            id="maxWords"
+            class="range-input"
+            type="range"
+            min="2"
+            max="20"
+            step="1"
+            value="6"
+          />
+        </section>
+
+        <div class="more-row">
+          <button
+            id="advancedToggle"
+            class="disclosure-button"
+            type="button"
+            aria-expanded="false"
+            aria-controls="advancedPanel"
+          >
+            <span>More options</span>
+            <img
+              id="advancedChevron"
+              class="disclosure-chevron"
+              src="assets/chevron-down.svg"
+              alt=""
+            />
+          </button>
+        </div>
+
+        <section id="advancedPanel" class="advanced-panel hidden">
+          <div id="geminiKeyField" class="field-block compact workflow-field">
+            <label class="eyebrow" for="geminiKey">Gemini API key</label>
+            <input
+              id="geminiKey"
+              class="text-input key-input"
+              type="password"
+              autocomplete="off"
+              autocapitalize="none"
+              spellcheck="false"
+              placeholder="Paste API key"
+            />
+            <span id="geminiKeyNote" class="field-note" aria-live="polite">Session only</span>
+          </div>
+
+          <div id="geminiModelField" class="field-block compact workflow-field">
+            <label class="eyebrow" for="geminiModel">Gemini model</label>
+            <div class="select-shell compact-select">
+              <select id="geminiModel">
+                <option value="">Choose a model</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="field-block compact workflow-field">
+            <label class="eyebrow" for="vocabPrompt">Vocabulary</label>
+            <textarea
+              id="vocabPrompt"
+              class="text-area"
+              rows="3"
+              placeholder="Names, products, and preferred spellings…"
+            ></textarea>
+          </div>
+
+          <div class="log-row">
+            <div class="log-heading">
+              <span class="eyebrow">Job log</span>
+              <span id="logState" class="log-state">— idle</span>
+            </div>
+            <button
+              id="logsToggle"
+              class="link-button"
+              type="button"
+              aria-expanded="false"
+              aria-controls="logsPanel"
+            >
+              Show log
+            </button>
+          </div>
+
+          <div id="logsPanel" class="logs-panel hidden">
+            <pre id="logs" class="logs" aria-live="polite">Job updates will appear here.</pre>
+            <div class="clear-log-row">
+              <button id="clearLogsBtn" class="link-button" type="button">Clear log</button>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <footer class="action-footer">
+        <div id="progressRow" class="progress-row hidden" aria-live="polite">
+          <img id="footerSpinner" class="footer-spinner hidden" src="assets/spinner.svg" alt="" />
+          <strong id="phaseLabel">Processing…</strong>
+          <span id="progressValue">—</span>
+        </div>
+
+        <div class="action-row">
+          <button id="generateBtn" class="primary-button" type="button" disabled>
+            <span>Generate &amp; Import</span>
+          </button>
+          <button id="cancelBtn" class="cancel-button hidden" type="button" disabled>
+            <span>Cancel</span>
+          </button>
+        </div>
+      </footer>
+    </div>
+  </body>
+</html>

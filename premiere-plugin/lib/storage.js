@@ -1,4 +1,4 @@
-const HinglishStorage = (() => {
+const SyncXStorage = (() => {
   const nodeFs = require("fs");
   const os = require("os");
 
@@ -31,9 +31,6 @@ const HinglishStorage = (() => {
     try {
       await nodeFs.mkdir(url, { recursive: true });
     } catch (error) {
-      // Premiere's UXP fs implementation can report EEXIST even when
-      // recursive mkdir is used. Treat it as success only after proving
-      // that the target is an existing, readable directory.
       try {
         nodeFs.readdirSync(url);
         return;
@@ -73,7 +70,13 @@ const HinglishStorage = (() => {
   async function saveResult(srtText, metadata, existingProjectNames) {
     const project = safeSegment(metadata.project_name, "Untitled Project");
     const sequence = safeSegment(metadata.sequence_name, "Untitled Sequence");
-    const directory = joinPath(os.homedir(), "Documents", "Hinglish SRT Outputs", project, sequence);
+    const directory = joinPath(
+      os.homedir(),
+      "Documents",
+      "Sync-X Outputs",
+      project,
+      sequence
+    );
     await ensureDirectory(directory);
     const filename = nextResultName(metadata, existingProjectNames, directory);
     const nativePath = joinPath(directory, filename);
@@ -81,12 +84,12 @@ const HinglishStorage = (() => {
     return { nativePath, filename, directory };
   }
 
-  return {
+  return Object.freeze({
     safeSegment,
     ensureDirectory,
     readNativeFile,
     deleteNativeFile,
     nextResultName,
     saveResult,
-  };
+  });
 })();
